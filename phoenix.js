@@ -1,3 +1,5 @@
+var MOD = ["cmd", "ctrl", "alt"];
+
 var NAMED_FRAMES = {
     'left_half': [0, 0, 0.5, 1], 
     'right_half': [0.5, 0, 0.5, 1],
@@ -9,17 +11,23 @@ var NAMED_FRAMES = {
     'reset': null,
 };
 
+// Number of pixels to move / extend a frame in one iteration.
 var INC_PX = 10;
 
-// Get the named frames key list
+// Get the named frames key list.
 var CYCLE_LIST = Object.keys(NAMED_FRAMES);
 var CYCLE = 0;
+
+// Current transient configuration. The cache key is used to remember the last
+// non-named position of a frame for a window. This behaviro relies on the fact
+// that App objects are Identifiable using hash().
 var CONFIG = {"cache": {}};
 
 var dump_rect = function(r) {
     return r.x + ":" + r.y + "@" + r.width + ":" + r.height;
 }
 
+// Given a named frame will set it's position.
 var set_frame = function(name) {
     var visible_screen = Window.focused().screen().flippedVisibleFrame();
     if (name == "reset") {
@@ -38,6 +46,66 @@ var set_frame = function(name) {
     }
 }
 
+/**
+ * Helper function that extends a given frame in a particular direction by 
+ * increment pixels.
+ * 
+ * @param {String} direction 
+ * @param {Number} increment 
+ */
+Window.prototype.extendFrame = function(direction, increment) {
+    var frame = this.frame();
+    var screen = this.screen().flippedVisibleFrame();
+    switch (direction) {
+        case "up":
+            frame.y -= increment;
+            frame.height += increment;
+            break;
+        case "down":
+            frame.height += increment;
+            break;
+        case "left":
+            frame.width += increment;
+            frame.x -= increment;
+            break;
+        case "right":
+            frame.width += increment;
+            break;
+    }
+    this.setFrame(frame);
+    this.updateCachedLocation();
+}
+
+Window.prototype.moveFrame = function(direction, increment) {
+    var frame = this.frame();
+    var screen = this.screen().flippedVisibleFrame();
+    switch (direction) {
+        case "up":
+            frame.y -= increment;
+            break;
+        case "down":
+            frame.y += increment;
+            break;
+        case "left":
+            frame.x -= increment;
+            break;
+        case "right":
+            frame.x += increment;        
+            break;
+    }
+    this.setFrame(frame);
+    this.updateCachedLocation();
+}
+
+/**
+ * Helper function that will cache the location of the current window frame given it's
+ * application hash. This is needed to be able to restore to a given size.
+ */
+Window.prototype.updateCachedLocation = function() {
+    var key = this.app().hash();
+    CONFIG["cache"][key] = this.frame();
+}
+
 
 /**
  * Helper function to debug print information about the current App
@@ -54,7 +122,9 @@ Window.prototype.stringify = function() {
     return buffer;
 }
 
-
+////////////////////////////////////////////////////////////////////////////////
+// List of Handlers
+////////////////////////////////////////////////////////////////////////////////
 var handler = new Key('c', [ 'cmd', 'ctrl', 'alt' ], function () {
     // Capture the current frame of the window and store it somewhere
     var wd = Window.focused();
@@ -74,15 +144,61 @@ var handler = new Key('c', [ 'cmd', 'ctrl', 'alt' ], function () {
     CYCLE = ++CYCLE % Object.keys(NAMED_FRAMES).length;
 });
 
-var grow_right = new Key("right", ["cmd", "ctrl", "alt","shift"], function(){
-    var frame = Window.focused().frame();
-    var screen = Window.focused().screen().flippedVisibleFrame();
 
-    // Modify frame
-    Phoenix.log(dump_rect(frame));
-    frame.width += INC_PX;
-    Window.focused().setFrame(frame);
-});
+var handlers = [];
+////////////// EXTEND //////////////////////////////////////////////////////////
+handlers.push(
+    new Key("right", MOD.concat(["shift"]), function() {
+        Window.focused().extendFrame("right", INC_PX);
+    })
+);
+
+handlers.push(
+    new Key("left", MOD.concat(["shift"]), function() {
+        Window.focused().extendFrame("left", INC_PX);
+    })
+);
+
+handlers.push(
+    new Key("up", MOD.concat(["shift"]), function() {
+        Window.focused().extendFrame("up", INC_PX);
+    })
+);
+
+handlers.push(
+    new Key("down", MOD.concat(["shift"]), function() {
+        Window.focused().extendFrame("down", INC_PX);
+    })
+);
+
+////////////// MOVE// //////////////////////////////////////////////////////////
+handlers.push(
+    new Key("right", MOD, function() {
+        Window.focused().moveFrame("right", INC_PX);
+    })
+);
+
+handlers.push(
+    new Key("left", MOD, function() {
+        Window.focused().moveFrame("left", INC_PX);
+    })
+);
+
+handlers.push(
+    new Key("up", MOD, function() {
+        Window.focused().moveFrame("up", INC_PX);
+    })
+);
+
+handlers.push(
+    new Key("down", MOD, function() {
+        Window.focused().moveFrame("down", INC_PX);
+    })
+);
+
+
+
+
 
 var launched = new Event('didLaunch', function() {
     Phoenix.log("Ready to roll...");
