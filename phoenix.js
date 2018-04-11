@@ -11,6 +11,16 @@ var NAMED_FRAMES = {
     'reset': null,
 };
 
+// x, y, width, height
+var LAYOUTS = {
+    "LAYOUT_3_CELLS": {
+        "Microsoft Outlook": [0, 0, 1/3, 2/3],
+        "iTerm2": [1/3, 0, 2/3, 1],
+        "Code": [1/3, 0, 2/3, 1],
+        "Limechat": [0, 2/3, 1/3, 1/3],
+    }
+};
+
 // Number of pixels to move / extend a frame in one iteration.
 var INC_PX = 10;
 
@@ -21,7 +31,12 @@ var CYCLE = 0;
 // Current transient configuration. The cache key is used to remember the last
 // non-named position of a frame for a window. This behaviro relies on the fact
 // that App objects are Identifiable using hash().
-var CONFIG = {"cache": {}};
+var CONFIG = {
+    "cache": {}, 
+    "layout": {
+        "LAYOUT_3_CELLS": false,
+    }
+};
 
 var dump_rect = function(r) {
     return r.x + ":" + r.y + "@" + r.width + ":" + r.height;
@@ -37,13 +52,43 @@ var set_frame = function(name) {
     } else {
 
         var f = NAMED_FRAMES[name];
-        var nf = {x: visible_screen.x + (visible_screen.width * f[0]), 
-            y: visible_screen.y + (visible_screen.height * f[1]),
-            width: visible_screen.width *f[2],
-            height: visible_screen.height * f[3]};
-        Phoenix.log(name + " " + dump_rect(nf) + " " + f + dump_rect(visible_screen));
-        Window.focused().setFrame(nf);
+        Window.focused().scaleFrame(f);
     }
+}
+
+Window.prototype.scaleFrame = function(scale) {
+    var visible_screen = Window.focused().screen().flippedVisibleFrame();
+    var nf = {
+        x: visible_screen.x + (visible_screen.width * scale[0]), 
+        y: visible_screen.y + (visible_screen.height * scale[1]),
+        width: visible_screen.width * scale[2],
+        height: visible_screen.height * scale[3]
+    };
+    this.setFrame(nf);
+}
+
+/**
+ * Given the name of a layout will try to place the window within this frame.
+ * It does verify the name of the layout and the application name to make sure
+ * it matches.
+ * 
+ * @param {String} layout Name of the Layout
+ */
+Window.prototype.adjustToLayout = function(layout) {
+    if (!(layout in LAYOUTS)) {
+        Phoenix.notify("Layout not found: " + layout);
+        return;
+    }
+    var l = LAYOUTS[layout];
+    var app_name = this.app().name();
+
+    if (!(app_name in l)) { return; }
+    if (!this.isMain()) { return; }
+
+    var dest = l[app_name];
+    Phoenix.log("App: " + app_name + " Scale: " + dest);
+    this.raise();
+    this.scaleFrame(dest);
 }
 
 /**
@@ -54,19 +99,19 @@ var set_frame = function(name) {
  * @param {Number} increment 
  */
 Window.prototype.extendFrame = function(direction, increment) {
+    if (this.isFullScreen() || this.isMinimised() || !this.isVisible()) return;
+
     var frame = this.frame();
     var screen = this.screen().flippedVisibleFrame();
     switch (direction) {
         case "up":
-            frame.y -= increment;
-            frame.height += increment;
+            frame.height -= increment;
             break;
         case "down":
             frame.height += increment;
             break;
         case "left":
-            frame.width += increment;
-            frame.x -= increment;
+            frame.width -= increment;
             break;
         case "right":
             frame.width += increment;
@@ -77,6 +122,8 @@ Window.prototype.extendFrame = function(direction, increment) {
 }
 
 Window.prototype.moveFrame = function(direction, increment) {
+    if (this.isFullScreen() || this.isMinimised() || !this.isVisible()) return;
+
     var frame = this.frame();
     var screen = this.screen().flippedVisibleFrame();
     switch (direction) {
@@ -114,12 +161,29 @@ App.prototype.stringify = function() {
     return this.name() + "(" + this.bundleIdentifier() + ")@" + this.hash();
 }
 
-
 Window.prototype.stringify = function() {
     var buffer = this.app().stringify() + "\n";
     var frame = this.frame();
     buffer += frame.x + ":" + frame.y + "@" + frame.width + ":" +  frame.height;
     return buffer;
+}
+
+Window.prototype.cacheFrame = function() {
+    var app = this.app();
+     // Check if we had the window already in cache
+     if (!(app.hash() in CONFIG["cache"])) {
+        CONFIG["cache"][app.hash()] = this.frame();
+    }
+}
+
+Window.prototype.resetFrame = function() {
+    var app = this.app();
+     // Check if we had the window already in cache
+     if (app.hash() in CONFIG["cache"]) {
+        var f = CONFIG["cache"][app.hash()];
+        Phoenix.log(f);
+        this.setFrame(f);
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -128,17 +192,8 @@ Window.prototype.stringify = function() {
 var handler = new Key('c', [ 'cmd', 'ctrl', 'alt' ], function () {
     // Capture the current frame of the window and store it somewhere
     var wd = Window.focused();
-    var current = wd.frame();
-
     // Get the app identifier
-    var app = wd.app();
-
-    Phoenix.notify(wd.stringify());
-
-    // Check if we had the window already in cache
-    if (!(app.hash() in CONFIG["cache"])) {
-        CONFIG["cache"][app.hash()] = current;
-    }
+    wd.cacheFrame();
     // Set based on cycle
     set_frame(Object.keys(NAMED_FRAMES)[CYCLE]);
     CYCLE = ++CYCLE % Object.keys(NAMED_FRAMES).length;
@@ -197,6 +252,42 @@ handlers.push(
 );
 
 
+////////////// SPECIAL /////////////////////////////////////////////////////////
+var layout_windows = function(layout, reset) {
+    if (!(layout in LAYOUTS)) return;
+    var state = CONFIG["layout"][layout];
+    Phoenix.log("State: " + state);
+    var apps = LAYOUTS[layout];
+    var all_windows = Window.all();
+    for (var i = 0; i < all_windows.length; ++i) {
+        var w = all_windows[i];
+        var name = w.app().name();
+        // Check if we should layout this app.
+        if (name in apps) {
+            Phoenix.log("Running layout for window..." + name);
+
+            // Cache the original position of this app
+            if (!state) {
+                w.cacheFrame();
+                w.adjustToLayout(layout);
+            } else {
+                w.resetFrame();
+            }
+        }
+    }
+    CONFIG["layout"][layout] = !CONFIG["layout"][layout];
+    if (state) {
+        Phoenix.notify("Restored old layout.");
+    } else {
+        Phoenix.notify("Set layout for windows.");
+    }
+}
+handlers.push(
+    new Key("h", MOD, function() {
+        var layout = "LAYOUT_3_CELLS";
+        layout_windows(layout);
+    })
+);
 
 
 
